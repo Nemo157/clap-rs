@@ -1,6 +1,6 @@
 use syn;
 
-use attrs::Attributes;
+use attrs::FieldAttributes;
 
 pub enum Field<'a> {
     Arg(Arg<'a>),
@@ -11,12 +11,11 @@ pub struct Arg<'a> {
     pub ident: &'a syn::Ident,
     pub name: &'a str,
     pub ty: &'a syn::Ty,
-    pub short: Option<String>,
+    pub short: Option<char>,
     pub long: Option<&'a str>,
     pub value_name: Option<&'a str>,
     pub index: Option<u64>,
-    pub summary: &'a str,
-    pub docs: &'a str,
+    pub docs: String,
     pub takes_value: bool,
     pub is_counter: bool,
     pub multiple: bool,
@@ -51,9 +50,10 @@ impl<'a> Field<'a> {
     }
 }
 
-impl<'a> From<(&'a syn::Field, &'a Attributes)> for Field<'a> {
-    fn from((field, attrs): (&'a syn::Field, &'a Attributes)) -> Field<'a> {
-        if attrs.get_bool("subcommand") {
+impl<'a> From<&'a syn::Field> for Field<'a> {
+    fn from(field: &'a syn::Field) -> Field<'a> {
+        let attrs: FieldAttributes = field.attrs.as_slice().into();
+        if attrs.subcommand {
             Field::Subcommand(Subcommand::from(field))
         } else {
             Field::Arg(Arg::from((field, attrs)))
@@ -61,26 +61,15 @@ impl<'a> From<(&'a syn::Field, &'a Attributes)> for Field<'a> {
     }
 }
 
-impl<'a> From<(&'a syn::Field, &'a Attributes)> for Arg<'a> {
-    fn from((field, attrs): (&'a syn::Field, &'a Attributes)) -> Arg<'a> {
-        let name = attrs.get("name")
-            .map(|a| a.into())
-            .unwrap_or_else(|| field.ident.as_ref().unwrap().as_ref());
-
-        let index = attrs.get("index").map(|a| a.into());
+impl<'a> From<(&'a syn::Field, FieldAttributes<'a>)> for Arg<'a> {
+    fn from((field, attrs): (&'a syn::Field, FieldAttributes<'a>)) -> Arg<'a> {
+        let name = attrs.name.unwrap_or_else(|| field.ident.as_ref().unwrap().as_ref());
 
         // Unlike clap we default to a flag option unless there's a attribute given
         // telling us to not do so
-        let is_flag = !index.is_some() && !attrs.get_bool("arg");
+        let is_flag = !attrs.index.is_some() && !attrs.arg;
 
-        let long = attrs.get("long")
-            .map(|a| a.into())
-            .or_else(|| if is_flag { Some(name) } else { None });
-
-        let short = attrs.get("short").map(|s| Into::<char>::into(s).to_string());
-        let value_name = attrs.get("value_name").map(|a| a.into());
-
-        let is_counter = attrs.get_bool("counted");
+        let long = attrs.long.or_else(|| if is_flag { Some(name) } else { None });
 
         let (is_bool, is_optional, is_vec, ty);
         match field.ty {
@@ -102,31 +91,23 @@ impl<'a> From<(&'a syn::Field, &'a Attributes)> for Arg<'a> {
             _ => panic!("unsupported field type {:?}", field.ty),
         };
 
-        let multiple = is_counter || is_vec;
-        let default_value = attrs.get("default_value").map(|a| a.into());
-        let min_values = attrs.get("min_values").map(|a| a.into());
-        let max_values = attrs.get("max_values").map(|a| a.into());
-
-        let required = !is_bool && !is_optional;
-
         Arg {
             ident: field.ident.as_ref().unwrap(),
             ty: ty,
             name: name,
-            short: short,
+            short: attrs.short,
             long: long,
-            index: index,
-            value_name: value_name,
-            summary: &attrs.summary,
-            docs: &attrs.docs,
-            is_counter: is_counter,
-            multiple: multiple,
-            takes_value: !is_counter && !is_bool,
+            index: attrs.index,
+            value_name: attrs.value_name,
+            docs: attrs.docs.iter().map(|s| s.trim()).collect::<Vec<_>>().join("\n"),
+            is_counter: attrs.counted,
+            multiple: attrs.counted || is_vec,
+            takes_value: !attrs.counted && !is_bool,
             is_optional: is_optional,
-            required: required,
-            default_value: default_value,
-            min_values: min_values,
-            max_values: max_values,
+            required: !is_bool && !is_optional,
+            default_value: attrs.default_value,
+            min_values: attrs.min_values,
+            max_values: attrs.max_values,
         }
     }
 }
